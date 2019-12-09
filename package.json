@@ -1,6 +1,6 @@
 {
   "name": "leveldown-nodejs-mobile",
-  "version": "5.1.1-1",
+  "version": "5.1.1-2",
   "description": "A low-level Node.js LevelDB binding",
   "license": "MIT",
   "main": "leveldown.js",
