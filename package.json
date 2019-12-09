@@ -10,6 +10,7 @@
     "test-gc": "npx -n=--expose-gc tape test/{cleanup,iterator-gc,chained-batch-gc}*-test.js",
     "test-electron": "electron test/electron.js",
     "test-prebuild": "cross-env PREBUILDS_ONLY=1 npm t",
+    "fetch-submodules": "git submodule update --recursive --init",
     "coverage": "nyc report --reporter=text-lcov | coveralls",
     "rebuild": "node-gyp rebuild",
     "prebuild": "prebuildify -t 8.14.0 --napi --strip",
