@@ -1,1 +1,1 @@
-module.exports = require('bindings')({ bindings: 'leveldown.node', name: 'leveldown' })
+module.exports = require('bindings')({ bindings: 'leveldown.node', name: 'leveldown-nodejs-mobile' })
