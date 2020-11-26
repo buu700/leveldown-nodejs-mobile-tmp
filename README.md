@@ -4,7 +4,7 @@ Fork of [leveldown](https://github.com/Level/leveldown) that is committed to sup
 
 ## Supports
 
-- Version 5.1.1
+- Version 5.4.1, 5.1.1
 - Android
 - iOS
 
