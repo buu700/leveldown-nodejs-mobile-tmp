@@ -8,12 +8,12 @@
 const testCommon = require('./common')
 
 if (process.argv[2] === 'run') {
-  var db = testCommon.factory()
-  var depth = 0
+  const db = testCommon.factory()
+  let depth = 0
 
   db.open(function () {
     function recurse () {
-      db.iterator({ start: '0' })
+      db.iterator({ gte: '0' })
       depth++
       recurse()
     }

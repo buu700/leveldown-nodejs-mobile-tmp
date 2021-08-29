@@ -29,6 +29,7 @@ libleveldb.a
 *.sln
 *.vcxproj
 *.vcxproj.filters
+.vscode
 
 # Benchmarks and tests
 test/
@@ -38,8 +39,8 @@ test/
 # Misc
 .nyc_output/
 yarn.lock
-.dntrc
 .gitmodules
+.github
 .travis.yml
 .cirrus.yml
 appveyor.yml

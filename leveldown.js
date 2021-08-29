@@ -1,3 +1,5 @@
+'use strict'
+
 const util = require('util')
 const AbstractLevelDOWN = require('abstract-leveldown').AbstractLevelDOWN
 const binding = require('./binding')
@@ -150,4 +152,4 @@ LevelDOWN.repair = function (location, callback) {
   binding.repair_db(location, callback)
 }
 
-module.exports = LevelDOWN.default = LevelDOWN
+module.exports = LevelDOWN

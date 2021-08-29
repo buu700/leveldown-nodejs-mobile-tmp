@@ -17,7 +17,6 @@
  */
 struct Database;
 struct Iterator;
-struct EndWorker;
 static void iterator_end_do (napi_env env, Iterator* iterator, napi_value cb);
 
 /**
@@ -500,8 +499,6 @@ struct PriorityWorker : public BaseWorker {
 struct Iterator {
   Iterator (Database* database,
             uint32_t id,
-            std::string* start,
-            std::string* end,
             bool reverse,
             bool keys,
             bool values,
@@ -516,8 +513,6 @@ struct Iterator {
             uint32_t highWaterMark)
     : database_(database),
       id_(id),
-      start_(start),
-      end_(end),
       reverse_(reverse),
       keys_(keys),
       values_(values),
@@ -545,8 +540,6 @@ struct Iterator {
   ~Iterator () {
     assert(ended_);
 
-    if (start_ != NULL) delete start_;
-    if (end_ != NULL) delete end_;
     if (lt_ != NULL) delete lt_;
     if (gt_ != NULL) delete gt_;
     if (lte_ != NULL) delete lte_;
@@ -575,40 +568,43 @@ struct Iterator {
     database_->ReleaseSnapshot(options_->snapshot);
   }
 
+  void CheckEndCallback () {
+    nexting_ = false;
+
+    if (endWorker_ != NULL) {
+      endWorker_->Queue();
+      endWorker_ = NULL;
+    }
+  }
+
   bool GetIterator () {
     if (dbIterator_ != NULL) return false;
 
     dbIterator_ = database_->NewIterator(options_);
 
-    if (start_ != NULL) {
-      dbIterator_->Seek(*start_);
+    if (!reverse_ && gte_ != NULL) {
+      dbIterator_->Seek(*gte_);
+    } else if (!reverse_ && gt_ != NULL) {
+      dbIterator_->Seek(*gt_);
 
-      if (reverse_) {
-        if (!dbIterator_->Valid()) {
-          dbIterator_->SeekToLast();
-        } else {
-          std::string keyStr = dbIterator_->key().ToString();
+      if (dbIterator_->Valid() && dbIterator_->key().compare(*gt_) == 0) {
+        dbIterator_->Next();
+      }
+    } else if (reverse_ && lte_ != NULL) {
+      dbIterator_->Seek(*lte_);
 
-          if (lt_ != NULL) {
-            if (lt_->compare(keyStr) <= 0)
-              dbIterator_->Prev();
-          } else if (lte_ != NULL) {
-            if (lte_->compare(keyStr) < 0)
-              dbIterator_->Prev();
-          } else if (start_ != NULL) {
-            if (start_->compare(keyStr))
-              dbIterator_->Prev();
-          }
-        }
+      if (!dbIterator_->Valid()) {
+        dbIterator_->SeekToLast();
+      } else if (dbIterator_->key().compare(*lte_) > 0) {
+        dbIterator_->Prev();
+      }
+    } else if (reverse_ && lt_ != NULL) {
+      dbIterator_->Seek(*lt_);
 
-        if (dbIterator_->Valid() && lt_ != NULL) {
-          if (lt_->compare(dbIterator_->key().ToString()) <= 0)
-            dbIterator_->Prev();
-        }
-      } else {
-        if (dbIterator_->Valid() && gt_ != NULL
-            && gt_->compare(dbIterator_->key().ToString()) == 0)
-          dbIterator_->Next();
+      if (!dbIterator_->Valid()) {
+        dbIterator_->SeekToLast();
+      } else if (dbIterator_->key().compare(*lt_) >= 0) {
+        dbIterator_->Prev();
       }
     } else if (reverse_) {
       dbIterator_->SeekToLast();
@@ -633,12 +629,8 @@ struct Iterator {
 
     if (dbIterator_->Valid()) {
       std::string keyStr = dbIterator_->key().ToString();
-      const int isEnd = end_ == NULL ? 1 : end_->compare(keyStr);
 
       if ((limit_ < 0 || ++count_ <= limit_)
-          && (end_ == NULL
-              || (reverse_ && (isEnd <= 0))
-              || (!reverse_ && (isEnd >= 0)))
           && ( lt_  != NULL ? (lt_->compare(keyStr) > 0)
                : lte_ != NULL ? (lte_->compare(keyStr) >= 0)
                : true )
@@ -660,20 +652,10 @@ struct Iterator {
   }
 
   bool OutOfRange (leveldb::Slice& target) {
-    if ((lt_ != NULL && target.compare(*lt_) >= 0) ||
-        (lte_ != NULL && target.compare(*lte_) > 0) ||
-        (start_ != NULL && reverse_ && target.compare(*start_) > 0)) {
-      return true;
-    }
-
-    if (end_ != NULL) {
-      int d = target.compare(*end_);
-      if (reverse_ ? d < 0 : d > 0) return true;
-    }
-
-    return ((gt_ != NULL && target.compare(*gt_) <= 0) ||
-            (gte_ != NULL && target.compare(*gte_) < 0) ||
-            (start_ != NULL && !reverse_ && target.compare(*start_) < 0));
+    return ((lt_  != NULL && target.compare(*lt_) >= 0) ||
+            (lte_ != NULL && target.compare(*lte_) > 0) ||
+            (gt_  != NULL && target.compare(*gt_) <= 0) ||
+            (gte_ != NULL && target.compare(*gte_) < 0));
   }
 
   bool IteratorNext (std::vector<std::pair<std::string, std::string> >& result) {
@@ -706,8 +688,6 @@ struct Iterator {
 
   Database* database_;
   uint32_t id_;
-  std::string* start_;
-  std::string* end_;
   bool reverse_;
   bool keys_;
   bool values_;
@@ -727,7 +707,7 @@ struct Iterator {
   bool ended_;
 
   leveldb::ReadOptions* options_;
-  EndWorker* endWorker_;
+  BaseWorker* endWorker_;
 
 private:
   napi_ref ref_;
@@ -1053,7 +1033,7 @@ struct ApproximateSizeWorker final : public PriorityWorker {
   void HandleOKCallback () override {
     napi_value argv[2];
     napi_get_null(env_, &argv[0]);
-    napi_create_uint32(env_, (uint32_t)size_, &argv[1]);
+    napi_create_int64(env_, (uint64_t)size_, &argv[1]);
     napi_value callback;
     napi_get_reference_value(env_, callbackRef_, &callback);
     CallFunction(env_, callback, 2, argv);
@@ -1246,21 +1226,13 @@ NAPI_METHOD(iterator_init) {
   uint32_t highWaterMark = Uint32Property(env, options, "highWaterMark",
                                           16 * 1024);
 
-  std::string* start = NULL;
-  std::string* end = RangeOption(env, options, "end");
   std::string* lt = RangeOption(env, options, "lt");
   std::string* lte = RangeOption(env, options, "lte");
   std::string* gt = RangeOption(env, options, "gt");
   std::string* gte = RangeOption(env, options, "gte");
 
-  if (!reverse && gte != NULL) start = new std::string(*gte);
-  else if (!reverse && gt != NULL) start = new std::string(*gt);
-  else if (reverse && lte != NULL) start = new std::string(*lte);
-  else if (reverse && lt != NULL) start = new std::string(*lt);
-  else start = RangeOption(env, options, "start");
-
   uint32_t id = database->currentIteratorId_++;
-  Iterator* iterator = new Iterator(database, id, start, end, reverse, keys,
+  Iterator* iterator = new Iterator(database, id, reverse, keys,
                                     values, limit, lt, lte, gt, gte, fillCache,
                                     keyAsBuffer, valueAsBuffer, highWaterMark);
   napi_value result;
@@ -1306,8 +1278,7 @@ NAPI_METHOD(iterator_seek) {
       dbIterator->SeekToLast();
       dbIterator->Next();
     }
-  }
-  else if (dbIterator->Valid()) {
+  } else if (dbIterator->Valid()) {
     int cmp = dbIterator->key().compare(target);
     if (cmp > 0 && iterator->reverse_) {
       dbIterator->Prev();
@@ -1390,29 +1361,15 @@ NAPI_METHOD(iterator_end) {
 }
 
 /**
- * TODO Move this to Iterator. There isn't any reason
- * for this function being a separate function pointer.
- */
-void CheckEndCallback (Iterator* iterator) {
-  iterator->nexting_ = false;
-  if (iterator->endWorker_ != NULL) {
-    iterator->endWorker_->Queue();
-    iterator->endWorker_ = NULL;
-  }
-}
-
-/**
  * Worker class for nexting an iterator.
  */
 struct NextWorker final : public BaseWorker {
   NextWorker (napi_env env,
               Iterator* iterator,
-              napi_value callback,
-              void (*localCallback)(Iterator*))
+              napi_value callback)
     : BaseWorker(env, iterator->database_, callback,
                  "leveldown.iterator.next"),
-      iterator_(iterator),
-      localCallback_(localCallback) {}
+      iterator_(iterator) {}
 
   ~NextWorker () {}
 
@@ -1453,8 +1410,7 @@ struct NextWorker final : public BaseWorker {
     }
 
     // clean up & handle the next/end state
-    // TODO this should just do iterator_->CheckEndCallback();
-    localCallback_(iterator_);
+    iterator_->CheckEndCallback();
 
     napi_value argv[3];
     napi_get_null(env_, &argv[0]);
@@ -1466,8 +1422,6 @@ struct NextWorker final : public BaseWorker {
   }
 
   Iterator* iterator_;
-  // TODO why do we need a function pointer for this?
-  void (*localCallback_)(Iterator*);
   std::vector<std::pair<std::string, std::string> > result_;
   bool ok_;
 };
@@ -1488,8 +1442,7 @@ NAPI_METHOD(iterator_next) {
     NAPI_RETURN_UNDEFINED();
   }
 
-  NextWorker* worker = new NextWorker(env, iterator, callback,
-                                      CheckEndCallback);
+  NextWorker* worker = new NextWorker(env, iterator, callback);
   iterator->nexting_ = true;
   worker->Queue();
 
