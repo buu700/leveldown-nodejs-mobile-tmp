@@ -1,3 +1,0 @@
-[submodule "deps/snappy/snappy"]
-	path = deps/snappy/snappy
-	url = https://github.com/google/snappy.git
